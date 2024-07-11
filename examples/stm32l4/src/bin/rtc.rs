@@ -1,11 +1,9 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use chrono::{NaiveDate, NaiveDateTime};
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::rcc::{ClockSrc, LsConfig, PLLSource, Pll, PllMul, PllPreDiv, PllRDiv};
 use embassy_stm32::rtc::{Rtc, RtcConfig};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::Config;
@@ -15,17 +13,23 @@ use {defmt_rtt as _, panic_probe as _};
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let mut config = Config::default();
-    config.rcc.mux = ClockSrc::PLL;
-    config.rcc.hse = Some(Hertz::mhz(8));
-    config.rcc.pll_src = PLLSource::HSE;
-    config.rcc.pll = Some(Pll {
-        prediv: PllPreDiv::DIV1,
-        mul: PllMul::MUL20,
-        divp: None,
-        divq: None,
-        divr: Some(PllRDiv::DIV2), // sysclk 80Mhz clock (8 / 1 * 20 / 2)
-    });
-    config.rcc.ls = LsConfig::default_lse();
+    {
+        use embassy_stm32::rcc::*;
+        config.rcc.sys = Sysclk::PLL1_R;
+        config.rcc.hse = Some(Hse {
+            freq: Hertz::mhz(8),
+            mode: HseMode::Oscillator,
+        });
+        config.rcc.pll = Some(Pll {
+            source: PllSource::HSE,
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL20,
+            divp: None,
+            divq: None,
+            divr: Some(PllRDiv::DIV2), // sysclk 80Mhz clock (8 / 1 * 20 / 2)
+        });
+        config.rcc.ls = LsConfig::default_lse();
+    }
     let p = embassy_stm32::init(config);
 
     info!("Hello World!");
@@ -36,7 +40,7 @@ async fn main(_spawner: Spawner) {
         .unwrap();
 
     let mut rtc = Rtc::new(p.RTC, RtcConfig::default());
-    info!("Got RTC! {:?}", now.timestamp());
+    info!("Got RTC! {:?}", now.and_utc().timestamp());
 
     rtc.set_datetime(now.into()).expect("datetime not set");
 
@@ -44,5 +48,5 @@ async fn main(_spawner: Spawner) {
     Timer::after_millis(20000).await;
 
     let then: NaiveDateTime = rtc.now().unwrap().into();
-    info!("Got RTC! {:?}", then.timestamp());
+    info!("Got RTC! {:?}", then.and_utc().timestamp());
 }

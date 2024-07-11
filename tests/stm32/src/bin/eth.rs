@@ -1,7 +1,6 @@
 // required-features: eth
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 #[path = "../common.rs"]
 mod common;
@@ -14,7 +13,7 @@ use embassy_stm32::peripherals::ETH;
 use embassy_stm32::rng::Rng;
 use embassy_stm32::{bind_interrupts, eth, peripherals, rng};
 use rand_core::RngCore;
-use static_cell::make_static;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 teleprobe_meta::timeout!(120);
@@ -60,6 +59,8 @@ async fn main(spawner: Spawner) {
     let n = 4;
     #[cfg(feature = "stm32f207zg")]
     let n = 5;
+    #[cfg(feature = "stm32h753zi")]
+    let n = 6;
 
     let mac_addr = [0x00, n, 0xDE, 0xAD, 0xBE, 0xEF];
 
@@ -69,8 +70,9 @@ async fn main(spawner: Spawner) {
     #[cfg(not(feature = "stm32f207zg"))]
     const PACKET_QUEUE_SIZE: usize = 4;
 
+    static PACKETS: StaticCell<PacketQueue<PACKET_QUEUE_SIZE, PACKET_QUEUE_SIZE>> = StaticCell::new();
     let device = Ethernet::new(
-        make_static!(PacketQueue::<PACKET_QUEUE_SIZE, PACKET_QUEUE_SIZE>::new()),
+        PACKETS.init(PacketQueue::<PACKET_QUEUE_SIZE, PACKET_QUEUE_SIZE>::new()),
         p.ETH,
         Irqs,
         p.PA1,
@@ -97,11 +99,13 @@ async fn main(spawner: Spawner) {
     //});
 
     // Init network stack
-    let stack = &*make_static!(Stack::new(
+    static STACK: StaticCell<Stack<Device>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
         device,
         config,
-        make_static!(StackResources::<2>::new()),
-        seed
+        RESOURCES.init(StackResources::<2>::new()),
+        seed,
     ));
 
     // Launch network task

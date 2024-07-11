@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use core::fmt::Write;
 use core::str::from_utf8;
@@ -8,7 +7,7 @@ use core::str::from_utf8;
 use cortex_m_rt::entry;
 use defmt::*;
 use embassy_executor::Executor;
-use embassy_stm32::peripherals::{DMA1_CH3, DMA1_CH4, SPI3};
+use embassy_stm32::mode::Async;
 use embassy_stm32::time::mhz;
 use embassy_stm32::{spi, Config};
 use heapless::String;
@@ -16,7 +15,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::task]
-async fn main_task(mut spi: spi::Spi<'static, SPI3, DMA1_CH3, DMA1_CH4>) {
+async fn main_task(mut spi: spi::Spi<'static, Async>) {
     for n in 0u32.. {
         let mut write: String<128> = String::new();
         let mut read = [0; 128];
@@ -36,17 +35,17 @@ fn main() -> ! {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
-        config.rcc.hsi = Some(Hsi::Mhz64);
+        config.rcc.hsi = Some(HSIPrescaler::DIV1);
         config.rcc.csi = true;
-        config.rcc.pll_src = PllSource::Hsi;
         config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSI,
             prediv: PllPreDiv::DIV4,
             mul: PllMul::MUL50,
             divp: Some(PllDiv::DIV2),
             divq: Some(PllDiv::DIV8), // used by SPI3. 100Mhz.
             divr: None,
         });
-        config.rcc.sys = Sysclk::Pll1P; // 400 Mhz
+        config.rcc.sys = Sysclk::PLL1_P; // 400 Mhz
         config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 Mhz
         config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 Mhz
         config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 Mhz

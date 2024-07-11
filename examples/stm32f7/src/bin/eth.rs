@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -10,17 +9,17 @@ use embassy_stm32::eth::generic_smi::GenericSMI;
 use embassy_stm32::eth::{Ethernet, PacketQueue};
 use embassy_stm32::peripherals::ETH;
 use embassy_stm32::rng::Rng;
-use embassy_stm32::time::mhz;
+use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, eth, peripherals, rng, Config};
 use embassy_time::Timer;
 use embedded_io_async::Write;
 use rand_core::RngCore;
-use static_cell::make_static;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     ETH => eth::InterruptHandler;
-    RNG => rng::InterruptHandler<peripherals::RNG>;
+    HASH_RNG => rng::InterruptHandler<peripherals::RNG>;
 });
 
 type Device = Ethernet<'static, ETH, GenericSMI>;
@@ -33,7 +32,25 @@ async fn net_task(stack: &'static Stack<Device>) -> ! {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
     let mut config = Config::default();
-    config.rcc.sys_ck = Some(mhz(200));
+    {
+        use embassy_stm32::rcc::*;
+        config.rcc.hse = Some(Hse {
+            freq: Hertz(8_000_000),
+            mode: HseMode::Bypass,
+        });
+        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll = Some(Pll {
+            prediv: PllPreDiv::DIV4,
+            mul: PllMul::MUL216,
+            divp: Some(PllPDiv::DIV2), // 8mhz / 4 * 216 / 2 = 216Mhz
+            divq: None,
+            divr: None,
+        });
+        config.rcc.ahb_pre = AHBPrescaler::DIV1;
+        config.rcc.apb1_pre = APBPrescaler::DIV4;
+        config.rcc.apb2_pre = APBPrescaler::DIV2;
+        config.rcc.sys = Sysclk::PLL1_P;
+    }
     let p = embassy_stm32::init(config);
 
     info!("Hello World!");
@@ -46,8 +63,9 @@ async fn main(spawner: Spawner) -> ! {
 
     let mac_addr = [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
 
+    static PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
     let device = Ethernet::new(
-        make_static!(PacketQueue::<16, 16>::new()),
+        PACKETS.init(PacketQueue::<4, 4>::new()),
         p.ETH,
         Irqs,
         p.PA1,
@@ -71,11 +89,13 @@ async fn main(spawner: Spawner) -> ! {
     //});
 
     // Init network stack
-    let stack = &*make_static!(Stack::new(
+    static STACK: StaticCell<Stack<Device>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
         device,
         config,
-        make_static!(StackResources::<2>::new()),
-        seed
+        RESOURCES.init(StackResources::<2>::new()),
+        seed,
     ));
 
     // Launch network task

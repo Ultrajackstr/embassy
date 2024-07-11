@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use embassy_executor::Spawner;
 use embassy_stm32::dcmi::{self, *};
@@ -19,7 +18,8 @@ const HEIGHT: usize = 100;
 static mut FRAME: [u32; WIDTH * HEIGHT / 2] = [0u32; WIDTH * HEIGHT / 2];
 
 bind_interrupts!(struct Irqs {
-    I2C1_EV => i2c::InterruptHandler<peripherals::I2C1>;
+    I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
+    I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
     DCMI => dcmi::InterruptHandler<peripherals::DCMI>;
 });
 
@@ -28,17 +28,17 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
-        config.rcc.hsi = Some(Hsi::Mhz64);
+        config.rcc.hsi = Some(HSIPrescaler::DIV1);
         config.rcc.csi = true;
-        config.rcc.pll_src = PllSource::Hsi;
         config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSI,
             prediv: PllPreDiv::DIV4,
             mul: PllMul::MUL50,
             divp: Some(PllDiv::DIV2),
             divq: Some(PllDiv::DIV8), // 100mhz
             divr: None,
         });
-        config.rcc.sys = Sysclk::Pll1P; // 400 Mhz
+        config.rcc.sys = Sysclk::PLL1_P; // 400 Mhz
         config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 Mhz
         config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 Mhz
         config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 Mhz
@@ -78,9 +78,9 @@ async fn main(_spawner: Spawner) {
     );
 
     defmt::info!("attempting capture");
-    defmt::unwrap!(dcmi.capture(unsafe { &mut FRAME }).await);
+    defmt::unwrap!(dcmi.capture(unsafe { &mut *core::ptr::addr_of_mut!(FRAME) }).await);
 
-    defmt::info!("captured frame: {:x}", unsafe { &FRAME });
+    defmt::info!("captured frame: {:x}", unsafe { &*core::ptr::addr_of!(FRAME) });
 
     defmt::info!("main loop running");
     loop {

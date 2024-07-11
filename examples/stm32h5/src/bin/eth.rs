@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -18,7 +17,7 @@ use embassy_stm32::{bind_interrupts, eth, peripherals, rng, Config};
 use embassy_time::Timer;
 use embedded_io_async::Write;
 use rand_core::RngCore;
-use static_cell::make_static;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -37,13 +36,13 @@ async fn net_task(stack: &'static Stack<Device>) -> ! {
 async fn main(spawner: Spawner) -> ! {
     let mut config = Config::default();
     config.rcc.hsi = None;
-    config.rcc.hsi48 = true; // needed for rng
+    config.rcc.hsi48 = Some(Default::default()); // needed for RNG
     config.rcc.hse = Some(Hse {
         freq: Hertz(8_000_000),
         mode: HseMode::BypassDigital,
     });
     config.rcc.pll1 = Some(Pll {
-        source: PllSource::Hse,
+        source: PllSource::HSE,
         prediv: PllPreDiv::DIV2,
         mul: PllMul::MUL125,
         divp: Some(PllDiv::DIV2),
@@ -54,7 +53,7 @@ async fn main(spawner: Spawner) -> ! {
     config.rcc.apb1_pre = APBPrescaler::DIV1;
     config.rcc.apb2_pre = APBPrescaler::DIV1;
     config.rcc.apb3_pre = APBPrescaler::DIV1;
-    config.rcc.sys = Sysclk::Pll1P;
+    config.rcc.sys = Sysclk::PLL1_P;
     config.rcc.voltage_scale = VoltageScale::Scale0;
     let p = embassy_stm32::init(config);
     info!("Hello World!");
@@ -67,8 +66,9 @@ async fn main(spawner: Spawner) -> ! {
 
     let mac_addr = [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
 
+    static PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
     let device = Ethernet::new(
-        make_static!(PacketQueue::<4, 4>::new()),
+        PACKETS.init(PacketQueue::<4, 4>::new()),
         p.ETH,
         Irqs,
         p.PA1,
@@ -92,11 +92,13 @@ async fn main(spawner: Spawner) -> ! {
     //});
 
     // Init network stack
-    let stack = &*make_static!(Stack::new(
+    static STACK: StaticCell<Stack<Device>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
         device,
         config,
-        make_static!(StackResources::<2>::new()),
-        seed
+        RESOURCES.init(StackResources::<2>::new()),
+        seed,
     ));
 
     // Launch network task

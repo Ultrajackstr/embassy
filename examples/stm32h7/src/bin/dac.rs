@@ -1,10 +1,9 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use cortex_m_rt::entry;
 use defmt::*;
-use embassy_stm32::dac::{DacCh1, DacChannel, Value};
+use embassy_stm32::dac::{DacCh1, Value};
 use embassy_stm32::dma::NoDma;
 use embassy_stm32::Config;
 use {defmt_rtt as _, panic_probe as _};
@@ -16,10 +15,10 @@ fn main() -> ! {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
-        config.rcc.hsi = Some(Hsi::Mhz64);
+        config.rcc.hsi = Some(HSIPrescaler::DIV1);
         config.rcc.csi = true;
-        config.rcc.pll_src = PllSource::Hsi;
         config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSI,
             prediv: PllPreDiv::DIV4,
             mul: PllMul::MUL50,
             divp: Some(PllDiv::DIV2),
@@ -27,29 +26,29 @@ fn main() -> ! {
             divr: None,
         });
         config.rcc.pll2 = Some(Pll {
+            source: PllSource::HSI,
             prediv: PllPreDiv::DIV4,
             mul: PllMul::MUL50,
             divp: Some(PllDiv::DIV8), // 100mhz
             divq: None,
             divr: None,
         });
-        config.rcc.sys = Sysclk::Pll1P; // 400 Mhz
+        config.rcc.sys = Sysclk::PLL1_P; // 400 Mhz
         config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 Mhz
         config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 Mhz
         config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 Mhz
         config.rcc.apb3_pre = APBPrescaler::DIV2; // 100 Mhz
         config.rcc.apb4_pre = APBPrescaler::DIV2; // 100 Mhz
         config.rcc.voltage_scale = VoltageScale::Scale1;
-        config.rcc.adc_clock_source = AdcClockSource::PLL2_P;
+        config.rcc.mux.adcsel = mux::Adcsel::PLL2_P;
     }
     let p = embassy_stm32::init(config);
 
     let mut dac = DacCh1::new(p.DAC1, NoDma, p.PA4);
-    unwrap!(dac.set_trigger_enable(false));
 
     loop {
         for v in 0..=255 {
-            unwrap!(dac.set(Value::Bit8(to_sine_wave(v))));
+            dac.set(Value::Bit8(to_sine_wave(v)));
         }
     }
 }
