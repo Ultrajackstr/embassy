@@ -195,7 +195,7 @@ fn main() {
                 .to_ascii_lowercase(),
         ),
         Err(GetOneError::None) => None,
-        Err(GetOneError::Multiple) => panic!("Multiple stm32xx Cargo features enabled"),
+        Err(GetOneError::Multiple) => panic!("Multiple time-driver-xxx Cargo features enabled"),
     };
 
     let time_driver_singleton = match time_driver.as_ref().map(|x| x.as_ref()) {
@@ -1220,6 +1220,17 @@ fn main() {
                     impl_dac_pin!( #peri, #pin_name, #ch);
                     })
                 }
+
+                if regs.kind == "spdifrx" {
+                    let peri = format_ident!("{}", p.name);
+                    let pin_name = format_ident!("{}", pin.pin);
+                    let af = pin.af.unwrap_or(0);
+                    let sel: u8 = pin.signal.strip_prefix("IN").unwrap().parse().unwrap();
+
+                    g.extend(quote! {
+                    impl_spdifrx_pin!( #peri, #pin_name, #af, #sel);
+                    })
+                }
             }
         }
     }
@@ -1227,13 +1238,12 @@ fn main() {
     // ========
     // Generate dma_trait_impl!
 
-    let signals: HashMap<_, _> = [
+    let mut signals: HashMap<_, _> = [
         // (kind, signal) => trait
         (("adc", "ADC"), quote!(crate::adc::RxDma)),
         (("adc", "ADC1"), quote!(crate::adc::RxDma)),
         (("adc", "ADC2"), quote!(crate::adc::RxDma)),
         (("adc", "ADC3"), quote!(crate::adc::RxDma)),
-        (("adc", "ADC4"), quote!(crate::adc::RxDma)),
         (("ucpd", "RX"), quote!(crate::ucpd::RxDma)),
         (("ucpd", "TX"), quote!(crate::ucpd::TxDma)),
         (("usart", "RX"), quote!(crate::usart::RxDma)),
@@ -1244,6 +1254,7 @@ fn main() {
         (("sai", "B"), quote!(crate::sai::Dma<B>)),
         (("spi", "RX"), quote!(crate::spi::RxDma)),
         (("spi", "TX"), quote!(crate::spi::TxDma)),
+        (("spdifrx", "RX"), quote!(crate::spdifrx::Dma)),
         (("i2c", "RX"), quote!(crate::i2c::RxDma)),
         (("i2c", "TX"), quote!(crate::i2c::TxDma)),
         (("dcmi", "DCMI"), quote!(crate::dcmi::FrameDma)),
@@ -1266,6 +1277,12 @@ fn main() {
         (("cordic", "READ"), quote!(crate::cordic::ReadDma)),   // FIXME: stm32u5a crash on Cordic driver
     ]
     .into();
+
+    if chip_name.starts_with("stm32u5") {
+        signals.insert(("adc", "ADC4"), quote!(crate::adc::RxDma4));
+    } else {
+        signals.insert(("adc", "ADC4"), quote!(crate::adc::RxDma));
+    }
 
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
