@@ -8,7 +8,7 @@
 
 use core::mem::ManuallyDrop;
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::Peri;
 // Re-export useful enums
 pub use stm32_metapac::timer::vals::{FilterValue, Sms as SlaveMode, Ts as TriggerSource};
 
@@ -181,7 +181,7 @@ impl From<OutputPolarity> for bool {
 
 /// Low-level timer driver.
 pub struct Timer<'d, T: CoreInstance> {
-    tim: PeripheralRef<'d, T>,
+    tim: Peri<'d, T>,
 }
 
 impl<'d, T: CoreInstance> Drop for Timer<'d, T> {
@@ -192,9 +192,7 @@ impl<'d, T: CoreInstance> Drop for Timer<'d, T> {
 
 impl<'d, T: CoreInstance> Timer<'d, T> {
     /// Create a new timer driver.
-    pub fn new(tim: impl Peripheral<P = T> + 'd) -> Self {
-        into_ref!(tim);
-
+    pub fn new(tim: Peri<'d, T>) -> Self {
         rcc::enable_and_reset::<T>();
 
         Self { tim }
@@ -233,6 +231,11 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     /// Reset the counter value to 0
     pub fn reset(&self) {
         self.regs_core().cnt().write(|r| r.set_cnt(0));
+    }
+
+    /// get the capability of the timer
+    pub fn bits(&self) -> TimerBits {
+        T::BITS
     }
 
     /// Set the frequency of how many times per second the timer counts up to the max value or down to 0.
