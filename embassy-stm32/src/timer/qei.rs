@@ -5,8 +5,10 @@ use core::marker::PhantomData;
 use stm32_metapac::timer::vals;
 
 use super::low_level::Timer;
-use super::{Channel1Pin, Channel2Pin, GeneralInstance4Channel};
+pub use super::{Ch1, Ch2};
+use super::{GeneralInstance4Channel, TimerPin};
 use crate::gpio::{AfType, AnyPin, Pull};
+use crate::timer::TimerChannel;
 use crate::Peri;
 
 /// Counting direction
@@ -17,37 +19,37 @@ pub enum Direction {
     Downcounting,
 }
 
-/// Channel 1 marker type.
-pub enum Ch1 {}
-/// Channel 2 marker type.
-pub enum Ch2 {}
-
 /// Wrapper for using a pin with QEI.
 pub struct QeiPin<'d, T, Channel> {
     _pin: Peri<'d, AnyPin>,
     phantom: PhantomData<(T, Channel)>,
 }
 
-macro_rules! channel_impl {
-    ($new_chx:ident, $channel:ident, $pin_trait:ident) => {
-        impl<'d, T: GeneralInstance4Channel> QeiPin<'d, T, $channel> {
-            #[doc = concat!("Create a new ", stringify!($channel), " QEI pin instance.")]
-            pub fn $new_chx(pin: Peri<'d, impl $pin_trait<T>>) -> Self {
-                critical_section::with(|_| {
-                    pin.set_low();
-                    pin.set_as_af(pin.af_num(), AfType::input(Pull::None));
-                });
-                QeiPin {
-                    _pin: pin.into(),
-                    phantom: PhantomData,
-                }
-            }
+impl<'d, T: GeneralInstance4Channel, C: QeiChannel> QeiPin<'d, T, C> {
+    /// Create a new  QEI pin instance.
+    pub fn new(pin: Peri<'d, impl TimerPin<T, C>>) -> Self {
+        critical_section::with(|_| {
+            pin.set_low();
+            pin.set_as_af(pin.af_num(), AfType::input(Pull::None));
+        });
+        QeiPin {
+            _pin: pin.into(),
+            phantom: PhantomData,
         }
-    };
+    }
 }
 
-channel_impl!(new_ch1, Ch1, Channel1Pin);
-channel_impl!(new_ch2, Ch2, Channel2Pin);
+trait SealedQeiChannel: TimerChannel {}
+
+/// Marker trait for a timer channel eligible for use with QEI.
+#[expect(private_bounds)]
+pub trait QeiChannel: SealedQeiChannel {}
+
+impl QeiChannel for Ch1 {}
+impl QeiChannel for Ch2 {}
+
+impl SealedQeiChannel for Ch1 {}
+impl SealedQeiChannel for Ch2 {}
 
 /// Quadrature decoder driver.
 pub struct Qei<'d, T: GeneralInstance4Channel> {

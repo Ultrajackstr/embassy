@@ -10,7 +10,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::gpio::vals::*;
 use crate::pac::gpio::{self};
-#[cfg(all(feature = "rt", feature = "mspm0c110x"))]
+#[cfg(all(feature = "rt", any(mspm0c110x, mspm0l110x)))]
 use crate::pac::interrupt;
 use crate::pac::{self};
 
@@ -208,8 +208,8 @@ impl<'d> Flex<'d> {
     /// or technical reference manual for additional details.
     #[inline]
     pub fn set_pf_unchecked(&mut self, pf: u8) {
-        // Per SLAU893, PF is only 5 bits
-        assert!((pf & 0x3F) != 0, "PF is out of range");
+        // Per SLAU893 and SLAU846B, PF is only 6 bits
+        assert_eq!(pf & 0xC0, 0, "PF is out of range");
 
         let pincm = pac::IOMUX.pincm(self.pin.pin_cm() as usize);
 
@@ -223,13 +223,13 @@ impl<'d> Flex<'d> {
     /// Get whether the pin input level is high.
     #[inline]
     pub fn is_high(&self) -> bool {
-        !self.is_low()
+        self.pin.block().din31_0().read().dio(self.pin.bit_index())
     }
 
     /// Get whether the pin input level is low.
     #[inline]
     pub fn is_low(&self) -> bool {
-        self.pin.block().din31_0().read().dio(self.pin.bit_index())
+        !self.is_high()
     }
 
     /// Returns current pin level
@@ -271,22 +271,22 @@ impl<'d> Flex<'d> {
         }
     }
 
-    /// Get the current pin input level.
+    /// Get the current pin output level.
     #[inline]
     pub fn get_output_level(&self) -> Level {
-        self.is_high().into()
+        self.is_set_high().into()
     }
 
     /// Is the output level high?
     #[inline]
     pub fn is_set_high(&self) -> bool {
-        !self.is_set_low()
+        self.pin.block().dout31_0().read().dio(self.pin.bit_index())
     }
 
     /// Is the output level low?
     #[inline]
     pub fn is_set_low(&self) -> bool {
-        (self.pin.block().dout31_0().read().0 & self.pin.bit_index() as u32) == 0
+        !self.is_set_high()
     }
 
     /// Wait until the pin is high. If it is already high, return immediately.
@@ -836,6 +836,31 @@ impl<'d> embedded_hal_async::digital::Wait for OutputOpenDrain<'d> {
     }
 }
 
+#[derive(Copy, Clone)]
+pub struct PfType {
+    pull: Pull,
+    input: bool,
+    invert: bool,
+}
+
+impl PfType {
+    pub const fn input(pull: Pull, invert: bool) -> Self {
+        Self {
+            pull,
+            input: true,
+            invert,
+        }
+    }
+
+    pub const fn output(pull: Pull, invert: bool) -> Self {
+        Self {
+            pull,
+            input: false,
+            invert,
+        }
+    }
+}
+
 /// The pin function to disconnect peripherals from the pin.
 ///
 /// This is also the pin function used to connect to analog peripherals, such as an ADC.
@@ -908,6 +933,40 @@ pub(crate) trait SealedPin {
     }
 
     #[inline]
+    fn set_as_analog(&self) {
+        let pincm = pac::IOMUX.pincm(self._pin_cm() as usize);
+
+        pincm.modify(|w| {
+            w.set_pf(DISCONNECT_PF);
+            w.set_pipu(false);
+            w.set_pipd(false);
+        });
+    }
+
+    fn update_pf(&self, ty: PfType) {
+        let pincm = pac::IOMUX.pincm(self._pin_cm() as usize);
+        let pf = pincm.read().pf();
+
+        set_pf(self._pin_cm() as usize, pf, ty);
+    }
+
+    fn set_as_pf(&self, pf: u8, ty: PfType) {
+        set_pf(self._pin_cm() as usize, pf, ty)
+    }
+
+    /// Set the pin as "disconnected", ie doing nothing and consuming the lowest
+    /// amount of power possible.
+    ///
+    /// This is currently the same as [`Self::set_as_analog()`] but is semantically different
+    /// really. Drivers should `set_as_disconnected()` pins when dropped.
+    ///
+    /// Note that this also disables the internal weak pull-up and pull-down resistors.
+    #[inline]
+    fn set_as_disconnected(&self) {
+        self.set_as_analog();
+    }
+
+    #[inline]
     fn block(&self) -> gpio::Gpio {
         match self.pin_port() / 32 {
             0 => pac::GPIOA,
@@ -918,6 +977,18 @@ pub(crate) trait SealedPin {
             _ => unreachable!(),
         }
     }
+}
+
+#[inline(never)]
+fn set_pf(pincm: usize, pf: u8, ty: PfType) {
+    pac::IOMUX.pincm(pincm).modify(|w| {
+        w.set_pf(pf);
+        w.set_pc(true);
+        w.set_pipu(ty.pull == Pull::Up);
+        w.set_pipd(ty.pull == Pull::Down);
+        w.set_inena(ty.input);
+        w.set_inv(ty.invert);
+    });
 }
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
@@ -1048,24 +1119,36 @@ impl Iterator for BitIter {
     }
 }
 
-// C110x has a dedicated interrupt just for GPIOA, as it does not have a GROUP1 interrupt.
-#[cfg(all(feature = "rt", feature = "mspm0c110x"))]
+// C110x and L110x have a dedicated interrupts just for GPIOA.
+//
+// These chips do not have a GROUP1 interrupt.
+#[cfg(all(feature = "rt", any(mspm0c110x, mspm0l110x)))]
 #[interrupt]
 fn GPIOA() {
-    gpioa_interrupt();
+    irq_handler(pac::GPIOA, &PORTA_WAKERS);
 }
 
-#[cfg(feature = "rt")]
-pub(crate) fn gpioa_interrupt() {
+// These symbols are weakly defined as DefaultHandler and are called by the interrupt group implementation.
+//
+// Defining these as no_mangle is required so that the linker will pick these over the default handler.
+
+#[cfg(all(feature = "rt", not(any(mspm0c110x, mspm0l110x))))]
+#[no_mangle]
+#[allow(non_snake_case)]
+fn GPIOA() {
     irq_handler(pac::GPIOA, &PORTA_WAKERS);
 }
 
 #[cfg(all(feature = "rt", gpio_pb))]
-pub(crate) fn gpiob_interrupt() {
+#[no_mangle]
+#[allow(non_snake_case)]
+fn GPIOB() {
     irq_handler(pac::GPIOB, &PORTB_WAKERS);
 }
 
 #[cfg(all(feature = "rt", gpio_pc))]
-pub(crate) fn gpioc_interrupt() {
+#[allow(non_snake_case)]
+#[no_mangle]
+fn GPIOC() {
     irq_handler(pac::GPIOC, &PORTC_WAKERS);
 }

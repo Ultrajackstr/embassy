@@ -157,6 +157,11 @@ impl<'d> Pwm<'d> {
             pin.pad_ctrl().modify(|w| {
                 #[cfg(feature = "_rp235x")]
                 w.set_iso(false);
+                #[cfg(feature = "_rp235x")]
+                if divmode != Divmode::DIV {
+                    // Is in input mode and so must enable input mode for the pin
+                    w.set_ie(true);
+                }
                 w.set_pue(b_pull == Pull::Up);
                 w.set_pde(b_pull == Pull::Down);
             });
@@ -459,9 +464,22 @@ impl<'d> Drop for Pwm<'d> {
         pac::PWM.ch(self.slice).csr().write_clear(|w| w.set_en(false));
         if let Some(pin) = &self.pin_a {
             pin.gpio().ctrl().write(|w| w.set_funcsel(31));
+            // Enable pin PULL-DOWN
+            pin.pad_ctrl().modify(|w| {
+                w.set_pde(true);
+            });
         }
         if let Some(pin) = &self.pin_b {
             pin.gpio().ctrl().write(|w| w.set_funcsel(31));
+            #[cfg(feature = "_rp235x")]
+            // Disable input mode. Only pin_b can be input, so not needed for pin_a
+            pin.pad_ctrl().modify(|w| {
+                w.set_ie(false);
+            });
+            // Enable pin PULL-DOWN
+            pin.pad_ctrl().modify(|w| {
+                w.set_pde(true);
+            });
         }
     }
 }
